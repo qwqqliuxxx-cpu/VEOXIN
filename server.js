@@ -139,7 +139,7 @@ app.post('/api/download-video', async (req, res) => {
 app.use(express.static(join(__dirname, 'dist')));
 
 // Catch-all 路由 - 支持客户端路由
-app.get('*', (req, res) => {
+app.get('/*', (req, res) => {
     res.sendFile(join(__dirname, 'dist', 'index.html'));
 });
 
