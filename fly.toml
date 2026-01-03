@@ -1,6 +1,6 @@
 # Fly.io 应用配置
 app = "veo-studio-pro"
-primary_region = "nrt"  # 东京区域，对中国用户友好
+primary_region = "sin"  # 东京区域，对中国用户友好
 
 [build]
 
