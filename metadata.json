@@ -1,0 +1,8 @@
+{
+  "name": "Copy of Veo Studio Pro",
+  "description": "Professional-grade AI video generation and digital avatar workstation powered by Google Veo 3.1.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
