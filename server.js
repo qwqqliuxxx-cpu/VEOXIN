@@ -1,146 +1,100 @@
 import express from 'express';
-import cors from 'cors';
+import path from 'path';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
-import { GoogleGenAI, VideoGenerationReferenceType } from '@google/genai';
+// Node 18+ 自带 fetch，无需 import node-fetch
 
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// 中间件
-app.use(cors());
-app.use(express.json({ limit: '50mb' }));
+app.use(express.json());
+// 托管前端静态文件
+app.use(express.static(path.join(__dirname, 'dist')));
 
-// 视频生成 API 端点
+// ----------------------------------------------------
+// 1. 通用聊天代理 (Gemini Pro) - 保持不变或使用 fetch
+// ----------------------------------------------------
+app.post('/api/chat', async (req, res) => {
+  try {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: 'No API Key set' });
+
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body)
+    });
+
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    console.error('Chat Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ----------------------------------------------------
+// 2. 视频生成代理 (Veo) - 关键修改！改用原生 fetch
+// ----------------------------------------------------
 app.post('/api/generate-video', async (req, res) => {
-    try {
-        const apiKey = process.env.GEMINI_API_KEY;
+  console.log('>>> [Proxy] 收到视频生成请求');
+  try {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) return res.status(500).json({ error: 'No API Key set' });
 
-        if (!apiKey) {
-            return res.status(500).json({
-                error: 'GEMINI_API_KEY 环境变量未设置',
-                message: '服务器配置错误，请联系管理员'
-            });
-        }
+    // A. 发起生成请求
+    const generateUrl = `https://generativelanguage.googleapis.com/v1beta/models/veo-2.0-generate-video-preview:predict?key=${apiKey}`;
+    
+    const initialResp = await fetch(generateUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body)
+    });
 
-        const { model, prompt, config, image, referenceImages } = req.body;
-
-        console.log('>>> [Proxy] 开始视频生成请求');
-
-        const ai = new GoogleGenAI({ apiKey });
-
-        // 构建请求配置
-        const requestConfig = {
-            model,
-            prompt,
-            config
-        };
-
-        // 添加可选参数
-        if (image) requestConfig.image = image;
-        if (referenceImages) {
-            requestConfig.config.referenceImages = referenceImages.map(ref => ({
-                image: ref.image,
-                referenceType: VideoGenerationReferenceType.ASSET
-            }));
-        }
-
-        // 发起视频生成
-        let operation = await ai.models.generateVideos(requestConfig);
-
-        // 返回初始操作状态
-        res.json({
-            name: operation.name,
-            done: operation.done,
-            error: operation.error,
-            response: operation.response
-        });
-
-    } catch (error) {
-        console.error('>>> [Proxy] 视频生成错误:', error);
-        res.status(500).json({
-            error: error.message || '视频生成失败',
-            message: '请求处理失败，请稍后重试'
-        });
+    if (!initialResp.ok) {
+      const errText = await initialResp.text();
+      throw new Error(`Google API Error: ${errText}`);
     }
+
+    const initialData = await initialResp.json();
+    console.log('>>> [Proxy] 任务已提交，操作名称:', initialData.name);
+
+    // B. 开始轮询 (手动实现，不依赖库)
+    let operation = initialData;
+    const operationName = initialData.name; // 格式通常是 operations/xxxx
+    
+    // 简单的轮询逻辑：最多轮询 60 次，每次间隔 2 秒
+    for (let i = 0; i < 60; i++) {
+        if (operation.done) {
+            console.log('>>> [Proxy] 视频生成完成！');
+            return res.json(operation); // 返回最终结果给前端
+        }
+
+        console.log(`>>> [Proxy] 轮询中... 第 ${i+1} 次`);
+        await new Promise(resolve => setTimeout(resolve, 2000)); // 等待 2 秒
+
+        // 查询操作状态
+        const pollUrl = `https://generativelanguage.googleapis.com/v1beta/${operationName}?key=${apiKey}`;
+        const pollResp = await fetch(pollUrl);
+        operation = await pollResp.json();
+    }
+
+    throw new Error('Timeout: Video generation took too long.');
+
+  } catch (error) {
+    console.error('>>> [Proxy] Video Error:', error);
+    res.status(500).json({ error: error.message || 'Video generation failed' });
+  }
 });
 
-// 轮询操作状态端点
-app.post('/api/poll-operation', async (req, res) => {
-    try {
-        const apiKey = process.env.GEMINI_API_KEY;
 
-        if (!apiKey) {
-            return res.status(500).json({
-                error: 'GEMINI_API_KEY 环境变量未设置'
-            });
-        }
-
-        const { operation } = req.body;
-
-        console.log('>>> [Proxy] 轮询操作状态');
-
-        const ai = new GoogleGenAI({ apiKey });
-        const currentOp = await ai.operations.getVideosOperation({ operation });
-
-        res.json({
-            name: currentOp.name,
-            done: currentOp.done,
-            error: currentOp.error,
-            response: currentOp.response
-        });
-
-    } catch (error) {
-        console.error('>>> [Proxy] 轮询错误:', error);
-        res.status(500).json({
-            error: error.message || '轮询操作失败'
-        });
-    }
-});
-
-// 下载视频端点
-app.post('/api/download-video', async (req, res) => {
-    try {
-        const apiKey = process.env.GEMINI_API_KEY;
-
-        if (!apiKey) {
-            return res.status(500).json({
-                error: 'GEMINI_API_KEY 环境变量未设置'
-            });
-        }
-
-        const { uri } = req.body;
-
-        console.log('>>> [Proxy] 下载视频:', uri);
-
-        // 通过代理下载视频
-        const response = await fetch(`${uri}&key=${apiKey}`);
-
-        if (!response.ok) {
-            throw new Error('视频下载失败');
-        }
-
-        // 转发视频流
-        res.setHeader('Content-Type', 'video/mp4');
-        response.body.pipe(res);
-
-    } catch (error) {
-        console.error('>>> [Proxy] 下载错误:', error);
-        res.status(500).json({
-            error: error.message || '视频下载失败'
-        });
-    }
-});
-
-// 静态文件服务
-app.use(express.static(join(__dirname, 'dist')));
-
-// Catch-all 路由 - 支持客户端路由
+// ----------------------------------------------------
+// 路由兜底
+// ----------------------------------------------------
 app.get(/(.*)/, (req, res) => {
-    res.sendFile(join(__dirname, 'dist', 'index.html'));
+  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
 app.listen(PORT, '0.0.0.0', () => {
