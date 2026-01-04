@@ -143,7 +143,7 @@ app.get(/(.*)/, (req, res) => {
     res.sendFile(join(__dirname, 'dist', 'index.html'));
 });
 
-app.listen(PORT, () => {
-    console.log(`>>> [Server] 服务器运行在端口 ${PORT}`);
-    console.log(`>>> [Server] API Key 状态: ${process.env.GEMINI_API_KEY ? '已配置 ✓' : '未配置 ✗'}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`>>> [Server] 服务器运行在端口 ${PORT}`);
+  console.log(`>>> [Server] API Key 状态: ${process.env.GEMINI_API_KEY ? '已配置 ✓' : '未配置 ✗'}`);
 });
